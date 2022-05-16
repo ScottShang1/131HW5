@@ -46,126 +46,122 @@ library(corrplot)
 library(knitr)
 library(MASS)
 library(ggplot2)
-tt=read_csv('titanic.csv')
-tt$survived=factor(tt$survived)
-tt$survived=relevel(tt$survived,"Yes")
-tt$pclass=factor(tt$pclass)
-head(tt)
+library(glmnet)
+library(janitor)
+pkm=read_csv('Pokemon.csv')
+pkm
+pkm=clean_names(pkm)
+pkm
 ```
+After using clean_names() on our data, it returns name with only lowercase letter, with _ as a separator, and convert symbol "#" to "number". It is helpful because it cleans up the names of variables.
 
-
-```{r}
-set.seed(1234)
-tt_split=initial_split(tt,prop=0.80,strata=survived)
-train=training(tt_split)
-test=testing(tt_split)
-
-```
-
-```{r}
-nrow(tt)
-```
-
-```{r}
-nrow(train)
-nrow(test)
-nrow(train)+nrow(test)
-```
-
-```{r}
-nrow(train)/nrow(tt)
-nrow(test)/nrow(tt)
-```
-The training and testing data sets have the appropriate number of obs that we set above.
 
 Question2
 ```{r}
-fold=vfold_cv(train,v=10)
-fold
+ggplot(pkm, aes(x = type_1)) +
+  geom_bar()
 ```
-Fold the training data. Use k-fold cross-validation, with k=10.
+There are 18 classes of the outcome. The flying type has the least numbers of Pokemon. Dark, dragon, fairy, fighting, ghost, ground, ice, poison and steel types also have less pokemon comparing to others.
+```{r}
+pkm=filter(pkm,type_1 %in% c("Bug","Fire","Grass","Normal","Water","Psychic"))
+pkm
+```
+```{r}
+pkm$type_1=as.factor(pkm$type_1)
+pkm$legendary=as.factor(pkm$legendary)
+pkm$generation=as.factor(pkm$generation)
+pkm
+```
+
 
 Question3
 
-In question 2, we randomly split the training data sets into 10 folds of roughly equal size. k-fold cross-validation is a method that apply our learned model to different groups of data so that we can learn our model using limited observations in the training data set. If we simply fitting and testing models on the entire training set, it could be a waste of data.
-If we did use the entire training set, that will be bootstrap.
+```{r}
+set.seed(1234)
+pkm_split=initial_split(pkm,prop=0.70,strata=type_1)
+train=training(pkm_split)
+test=testing(pkm_split)
+dim(pkm)*0.7
+dim(train)
+```
+Yes, the training and test sets have the desired number of observations.
+
+```{r}
+folds=vfold_cv(train,v=5,strata=type_1)
+folds
+```
+Stratifying the folds is useful because it makes sure that the folds are representative of the whole data set.
+
 
 Question4
 ```{r}
-tt_recipe=recipe(survived~pclass+sex+age+sib_sp+parch+fare,data=train) %>%
-  step_dummy(all_nominal_predictors()) %>%
-  step_impute_linear(age,impute_with=imp_vars(all_predictors())) %>%
-  step_interact(terms=~sex_male:fare+age:fare)
-
-log_reg=logistic_reg() %>% 
-  set_engine("glm") %>% 
-  set_mode("classification")
-
-log_wf=workflow() %>% 
-  add_model(log_reg) %>% 
-  add_recipe(tt_recipe)
-
-lda_mod=discrim_linear() %>% 
-  set_mode("classification") %>% 
-  set_engine("MASS")
-
-lda_wf=workflow() %>% 
-  add_model(lda_mod) %>% 
-  add_recipe(tt_recipe)
-
-qda_mod=discrim_quad() %>% 
-  set_mode("classification") %>% 
-  set_engine("MASS")
-
-qda_wf=workflow() %>% 
-  add_model(qda_mod) %>% 
-  add_recipe(tt_recipe)
+rcp=recipe(type_1~legendary+generation+sp_atk+attack+speed+defense+hp+sp_def,data=train) %>%
+  step_dummy(legendary) %>%
+  step_dummy(generation) %>%
+  step_normalize(all_predictors())
 ```
-There are 3 models, fitted with 10 folds each. In total, there will be 30 models.
+
 
 Question5
 ```{r}
-log_fold=log_wf %>% 
-  fit_resamples(fold)
+reg=multinom_reg(mixture=tune(),penalty=tune()) %>%
+  set_mode("classification") %>%
+  set_engine("glmnet")
 
-lda_fold=lda_wf %>% 
-  fit_resamples(fold)
+wf=workflow() %>%
+  add_recipe(rcp) %>%
+  add_model(reg)
 
-qda_fold=qda_wf %>% 
-  fit_resamples(fold)
+grid<-grid_regular(penalty(range = c(-5, 5)),mixture(),levels = 10)
+grid
 ```
-
+We will be fitting 500 models, since we have 10 levels of penalty, 10 levels of mixture, and 5 folds.
 
 Question6
 ```{r}
-collect_metrics(log_fold)
+tune_res=tune_grid(wf,resamples=folds,grid=grid)
 ```
 
-```{r}
-collect_metrics(lda_fold)
-```
 
 ```{r}
-collect_metrics(qda_fold)
+autoplot(tune_res)
 ```
-As we can see, Logistic Regression has the best mean accuracy, and Quadratic Discriminant Analysis has the smallest standard error. Overall speaking, Logistic Regression is the best of the three, with best mean accuracy and acceptable standard error.
+What do you notice? Do larger or smaller values of penalty and mixture produce better accuracy and ROC AUC?
+
+Smaller values of penalty and mixture produce better accuracy and ROC AUC. Mixture values have no strong impact when penalty is large or small, but do have better accuracy and ROC AUC for mid-range penalty.
 
 
 Question7
 ```{r}
-fitted=fit(log_wf,train)
-acc=augment(fitted,new_data=train) %>%
-  accuracy(truth=survived,estimate=.pred_class)
-acc
+best=select_best(tune_res,metric="roc_auc")
+final=finalize_workflow(wf,best)
+
+final_fit=fit(final,data=train)
+
+augment(final_fit,new_data=test) %>%
+  accuracy(truth=type_1,estimate=.pred_class)
 ```
-Our model is pretty accurate!
+The performance on the testing set is pretty bad.
+
 
 Question8
 ```{r}
-tt_pf=predict(fitted,new_data=test)
-tt_pf=bind_cols(tt_pf)
-tt_pf=augment(fitted,new_data=test) %>%
-  accuracy(truth=survived,estimate=.pred_class)
-tt_pf
+augment(final_fit,new_data=test) %>%
+  roc_auc(truth=type_1,estimate=.pred_Bug:.pred_Water)
 ```
-Testing accuracy is 0.78 which slightly lower than what we got across training folds. My intuition is that our model might overfitted the training folds a little bit, but overall speaking, it's acceptable.
+
+```{r}
+augment(final_fit,new_data=test) %>%
+  roc_curve(truth=type_1,estimate=.pred_Bug:.pred_Water) %>%
+  autoplot()
+
+```
+
+```{r}
+augment(final_fit,new_data=test) %>%
+  conf_mat(truth=type_1,estimate=.pred_class) %>%
+  autoplot(type="heatmap")
+```
+First of all, our model doesn't perform well.
+From the ROC curves, we can tell that normal type is the model best at predicting, which is also proved by the heatmap of the confusion matrix, followed by bug type and psychic type. Water type is the worst according to ROC curve, but heatmap shows different result. This might because water type has the most observations.
+The reason behind the poor performance of our model might be not enough observations. With less than 100 observations per type on average, it can be hard to achieve an accurate model.
