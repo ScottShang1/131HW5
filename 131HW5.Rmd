@@ -1,0 +1,171 @@
+---
+title: "131HW5"
+author: "Scott Shang (8458655)"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+---
+title: "131HW5"
+author: "Scott Shang (8458655)"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: pdf_document
+---
+
+```{r setup, echo=FALSE}
+library(knitr)
+# set global chunk options: images will be 7x5 inches
+knitr::opts_chunk$set(fig.width=7, fig.height=5)
+options(digits = 4)
+
+
+## indents are for indenting r code as formatted text
+## They may need to be adjusted depending on your OS
+# if your output looks odd, increase or decrease indent
+indent1 = '    '
+indent2 = '        '
+indent3 = '            '
+```
+
+Question1
+```{r}
+library("tidyverse")
+library("tidymodels")
+library("dplyr")
+library("yardstick")
+library(readr)
+library(pROC)
+library(discrim)
+library(poissonreg)
+library(corrr)
+library(klaR)
+library(corrplot)
+library(knitr)
+library(MASS)
+library(ggplot2)
+tt=read_csv('titanic.csv')
+tt$survived=factor(tt$survived)
+tt$survived=relevel(tt$survived,"Yes")
+tt$pclass=factor(tt$pclass)
+head(tt)
+```
+
+
+```{r}
+set.seed(1234)
+tt_split=initial_split(tt,prop=0.80,strata=survived)
+train=training(tt_split)
+test=testing(tt_split)
+
+```
+
+```{r}
+nrow(tt)
+```
+
+```{r}
+nrow(train)
+nrow(test)
+nrow(train)+nrow(test)
+```
+
+```{r}
+nrow(train)/nrow(tt)
+nrow(test)/nrow(tt)
+```
+The training and testing data sets have the appropriate number of obs that we set above.
+
+Question2
+```{r}
+fold=vfold_cv(train,v=10)
+fold
+```
+Fold the training data. Use k-fold cross-validation, with k=10.
+
+Question3
+
+In question 2, we randomly split the training data sets into 10 folds of roughly equal size. k-fold cross-validation is a method that apply our learned model to different groups of data so that we can learn our model using limited observations in the training data set. If we simply fitting and testing models on the entire training set, it could be a waste of data.
+If we did use the entire training set, that will be bootstrap.
+
+Question4
+```{r}
+tt_recipe=recipe(survived~pclass+sex+age+sib_sp+parch+fare,data=train) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_impute_linear(age,impute_with=imp_vars(all_predictors())) %>%
+  step_interact(terms=~sex_male:fare+age:fare)
+
+log_reg=logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+
+log_wf=workflow() %>% 
+  add_model(log_reg) %>% 
+  add_recipe(tt_recipe)
+
+lda_mod=discrim_linear() %>% 
+  set_mode("classification") %>% 
+  set_engine("MASS")
+
+lda_wf=workflow() %>% 
+  add_model(lda_mod) %>% 
+  add_recipe(tt_recipe)
+
+qda_mod=discrim_quad() %>% 
+  set_mode("classification") %>% 
+  set_engine("MASS")
+
+qda_wf=workflow() %>% 
+  add_model(qda_mod) %>% 
+  add_recipe(tt_recipe)
+```
+There are 3 models, fitted with 10 folds each. In total, there will be 30 models.
+
+Question5
+```{r}
+log_fold=log_wf %>% 
+  fit_resamples(fold)
+
+lda_fold=lda_wf %>% 
+  fit_resamples(fold)
+
+qda_fold=qda_wf %>% 
+  fit_resamples(fold)
+```
+
+
+Question6
+```{r}
+collect_metrics(log_fold)
+```
+
+```{r}
+collect_metrics(lda_fold)
+```
+
+```{r}
+collect_metrics(qda_fold)
+```
+As we can see, Logistic Regression has the best mean accuracy, and Quadratic Discriminant Analysis has the smallest standard error. Overall speaking, Logistic Regression is the best of the three, with best mean accuracy and acceptable standard error.
+
+
+Question7
+```{r}
+fitted=fit(log_wf,train)
+acc=augment(fitted,new_data=train) %>%
+  accuracy(truth=survived,estimate=.pred_class)
+acc
+```
+Our model is pretty accurate!
+
+Question8
+```{r}
+tt_pf=predict(fitted,new_data=test)
+tt_pf=bind_cols(tt_pf)
+tt_pf=augment(fitted,new_data=test) %>%
+  accuracy(truth=survived,estimate=.pred_class)
+tt_pf
+```
+Testing accuracy is 0.78 which slightly lower than what we got across training folds. My intuition is that our model might overfitted the training folds a little bit, but overall speaking, it's acceptable.
